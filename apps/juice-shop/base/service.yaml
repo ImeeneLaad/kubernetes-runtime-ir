@@ -1,0 +1,16 @@
+# NodePort so kind's extraPortMappings can reach it from Windows
+# (127.0.0.1:3030 dev, 127.0.0.1:3031 prod). The overlays set the nodePort.
+apiVersion: v1
+kind: Service
+metadata:
+  name: juice-shop
+  labels:
+    app.kubernetes.io/name: juice-shop
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: juice-shop
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

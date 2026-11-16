@@ -1,0 +1,121 @@
+# Shuffle SOAR v2.3.0, adapted from the official compose file
+# (unmodified copy: upstream-v2.3.0/docker-compose.yml, sha256 b613e692…).
+#
+# Start/stop: bash soar/shuffle/shuffle.sh up|down|status   (Ubuntu)
+#
+# Changes vs upstream (rationale: docs/05-shuffle.md):
+#   - images pinned to 2.3.0 instead of :latest
+#   - every port bound to 127.0.0.1 (the lab also runs a vulnerable app)
+#   - OpenSearch :9200 NOT published (upstream publishes it with a public default password)
+#   - passwords + encryption key generated per install (secrets/shuffle-secrets.env, git-ignored)
+#   - optional "shuffle-security" service (needs a source build) removed
+#   - OpenSearch heap 1 GB, data in Docker named volumes (not on the Windows drive)
+#   - backend also attached to the kind network at a fixed IP, so Falcosidekick can reach it
+#
+# SECURITY NOTE: backend and orborus mount /var/run/docker.sock. That is root
+# on the Docker host, which includes the kind node, i.e. the whole Kubernetes
+# cluster. Required by Shuffle to start its workers and apps. Analysed in the
+# SOAR-compromise risk assessment.
+name: shuffle
+
+services:
+  frontend:
+    image: ghcr.io/shuffle/shuffle-frontend:2.3.0
+    container_name: shuffle-frontend
+    hostname: shuffle-frontend
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT}:80"
+      - "127.0.0.1:${FRONTEND_PORT_HTTPS}:443"
+    networks: [shuffle]
+    environment:
+      - BACKEND_HOSTNAME=${BACKEND_HOSTNAME}
+    restart: unless-stopped
+    depends_on: [backend]
+
+  backend:
+    image: ghcr.io/shuffle/shuffle-backend:2.3.0
+    container_name: shuffle-backend
+    hostname: ${BACKEND_HOSTNAME}
+    ports:
+      - "127.0.0.1:${BACKEND_PORT}:5001"
+    networks:
+      shuffle: {}
+      kind:
+        ipv4_address: ${SHUFFLE_KIND_IP}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Only the vendored, pinned apps (fetch-apps.sh), read-only.
+      - ./apps:/shuffle-apps:ro
+      - shuffle-files:/shuffle-files
+    env_file:
+      - .env
+      - secrets/shuffle-secrets.env
+    environment:
+      - SHUFFLE_APP_HOTLOAD_FOLDER=/shuffle-apps
+      - SHUFFLE_FILE_LOCATION=/shuffle-files
+    restart: unless-stopped
+    depends_on: [opensearch]
+
+  orborus:
+    image: ghcr.io/shuffle/shuffle-orborus:2.3.0
+    container_name: shuffle-orborus
+    hostname: shuffle-orborus
+    networks: [shuffle]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    env_file:
+      - .env
+      - secrets/shuffle-secrets.env
+    environment:
+      - SHUFFLE_APP_SDK_TIMEOUT=300
+      - ENVIRONMENT_NAME=Shuffle
+      - ORG_ID=Shuffle
+      - BASE_URL=http://${OUTER_HOSTNAME}:5001
+      - DOCKER_API_VERSION=1.44
+      - SHUFFLE_STATS_DISABLED=true
+      - SHUFFLE_LOGS_DISABLED=true
+      # Upstream sets SHUFFLE_SWARM_CONFIG=run, which needs Docker Swarm (not
+      # used here): plain containers instead.
+      # The Tenzir pipeline engine (pulls the unpinned tenzir/tenzir:main and
+      # blocks Orborus while it downloads) is not used by this project.
+      - SHUFFLE_SKIP_PIPELINES=true
+      - SHUFFLE_PIPELINE_ENABLED=false
+      - CLEANUP=false
+      - SHUFFLE_WORKER_IMAGE=ghcr.io/shuffle/shuffle-worker:2.3.0
+    restart: unless-stopped
+    security_opt:
+      - seccomp:unconfined
+
+  opensearch:
+    image: opensearchproject/opensearch:3.2.0
+    hostname: shuffle-opensearch
+    container_name: shuffle-opensearch
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms1024m -Xmx1024m"
+      - bootstrap.memory_lock=true
+      - DISABLE_PERFORMANCE_ANALYZER_AGENT_CLI=true
+      - cluster.initial_master_nodes=shuffle-opensearch
+      - cluster.routing.allocation.disk.threshold_enabled=false
+      - cluster.name=shuffle-cluster
+      - node.name=shuffle-opensearch
+      - node.store.allow_mmap=false      # avoids the vm.max_map_count host requirement
+      - discovery.seed_hosts=shuffle-opensearch
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${SHUFFLE_OPENSEARCH_PASSWORD}
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile:  { soft: 65536, hard: 65536 }
+    volumes:
+      - shuffle-database:/usr/share/opensearch/data
+    # No "ports:": the database is reachable only by the backend on the shuffle network.
+    networks: [shuffle]
+    restart: unless-stopped
+
+volumes:
+  shuffle-database: {}
+  shuffle-files: {}
+
+networks:
+  shuffle:
+    driver: bridge
+  kind:
+    external: true        # the Docker network created by kind for the cluster node

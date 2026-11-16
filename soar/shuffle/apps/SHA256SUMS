@@ -1,0 +1,11 @@
+bbe9720a802588df4c70875c72c4e6fa27f0d3c14fb379e23dc72221fb110e4f  ./http/1.4.0/Dockerfile
+01d24091c4919a681e730796be330622017f30b4f3f378e4e7e95a3ae1dce637  ./http/1.4.0/api.yaml
+d1777c96f760ed886161e577de67f8bed17b51f9d029187447ddf938d020e677  ./http/1.4.0/requirements.txt
+d6f1c61c3c129a32e0e694343bc02e5a6522e1158a01f1650faf2f79191e73ce  ./http/1.4.0/src/app.py
+7b17d3f6224757d173dfb693a50a82fd586336ab040d95f706c769f902bec23e  ./shuffle-tools/1.2.0/Dockerfile
+707ea917c9ac94f52ba2c3a55971386e57f0d02f8bbeb19fea8bebc4ae74da50  ./shuffle-tools/1.2.0/api.yaml
+635a99d629ac9535ec806fc3fb2df54972247d856669e1abb95e09d26023c097  ./shuffle-tools/1.2.0/requirements.txt
+cff7448594f11a5dce24f58aff7f5bfbaeffcb23bdde7652cf5e0080e0978b7c  ./shuffle-tools/1.2.0/run.sh
+72a4b0b1ed38b3dbf8814cd42d65f439fed429b4b58cc3d1d70a20af31ca6a1d  ./shuffle-tools/1.2.0/src/app.py
+a430fbd1cbb2a98eb736e13137fcb7452781e42af39902a5dc4112f9af1daa1c  ./shuffle-tools/1.2.0/src/concurrency.py
+660663c19f1efd03fa045d32d3721ffec8df9a43d3a8496ec43bc9c445fd2698  ./shuffle-tools/1.2.0/src/switch.py

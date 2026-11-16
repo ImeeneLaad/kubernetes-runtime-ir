@@ -1,0 +1,67 @@
+# Guardrails on what the responder may do with "patch pods" / "delete pods".
+# Enforced by the API server itself (ValidatingAdmissionPolicy, GA since 1.30),
+# so they hold even if the SOAR or the responder code is compromised.
+#
+#  1. never change a pod's spec (no image swap, no command change, ...)
+#  2. only change the labels security.ir/quarantine, security.ir/incident,
+#     app.kubernetes.io/name; annotations and ownerReferences untouched
+#  3. never lift a quarantine (only an admin can)
+#  4. never put a quarantined pod back behind its Service (re-add app label)
+#  5. only delete pods that are already quarantined
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ir-responder-guardrails
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [UPDATE, DELETE]
+        resources: [pods]          # main resource only (not pods/status)
+  matchConditions:
+    - name: only-the-responder
+      expression: "request.userInfo.username == 'system:serviceaccount:ir-system:ir-responder'"
+  variables:
+    - name: oldLabels
+      expression: "oldObject.metadata.?labels.orValue({})"
+    - name: newLabels
+      expression: "request.operation == 'UPDATE' ? object.metadata.?labels.orValue({}) : {}"
+    - name: allowedKeys
+      expression: "['security.ir/quarantine', 'security.ir/incident', 'app.kubernetes.io/name']"
+    - name: wasQuarantined
+      expression: "variables.oldLabels[?'security.ir/quarantine'].orValue('') == 'true'"
+    - name: isQuarantined
+      expression: "variables.newLabels[?'security.ir/quarantine'].orValue('') == 'true'"
+  validations:
+    - expression: "request.operation != 'UPDATE' || object.spec == oldObject.spec"
+      message: "ir-responder may not modify a pod's spec"
+    - expression: >
+        request.operation != 'UPDATE' ||
+        (variables.newLabels.all(k, k in variables.allowedKeys ||
+            (k in variables.oldLabels && variables.oldLabels[k] == variables.newLabels[k]))
+         && variables.oldLabels.all(k, k in variables.allowedKeys || k in variables.newLabels))
+      message: "ir-responder may only change the labels security.ir/quarantine, security.ir/incident, app.kubernetes.io/name"
+    - expression: >
+        request.operation != 'UPDATE' ||
+        (object.metadata.?annotations.orValue({}) == oldObject.metadata.?annotations.orValue({})
+         && object.metadata.?ownerReferences.orValue([]) == oldObject.metadata.?ownerReferences.orValue([]))
+      message: "ir-responder may not change annotations or ownerReferences"
+    - expression: "request.operation != 'UPDATE' || !variables.wasQuarantined || variables.isQuarantined"
+      message: "ir-responder may not lift a quarantine (admin only)"
+    - expression: >
+        request.operation != 'UPDATE' || !variables.isQuarantined ||
+        !('app.kubernetes.io/name' in variables.newLabels) ||
+        'app.kubernetes.io/name' in variables.oldLabels
+      message: "ir-responder may not put a quarantined pod back behind its Service"
+    - expression: "request.operation != 'DELETE' || variables.wasQuarantined"
+      message: "ir-responder may only delete quarantined pods"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ir-responder-guardrails
+spec:
+  policyName: ir-responder-guardrails
+  validationActions: [Deny]

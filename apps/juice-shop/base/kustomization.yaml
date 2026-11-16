@@ -1,0 +1,10 @@
+# Juice Shop "base": everything common to dev and prod.
+# Overlays (../overlays/dev, ../overlays/prod) only set namespace, replicas,
+# NodePort and environment labels.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicies.yaml

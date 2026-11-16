@@ -1,0 +1,100 @@
+# Falco Helm values. Chart falcosecurity/falco 9.2.2 (Falco 0.45.2).
+# Install (Ubuntu, project root): see falco/install.sh
+#
+# Environment constraints (see docs/03-falco.md):
+# - WSL2 kernel 6.6 with BTF and no kernel headers -> modern eBPF only (no kmod).
+# - The kernel is shared with Docker Desktop and every other container on the
+#   machine, so Falco sees ALL of their syscalls. Kubernetes metadata comes
+#   only from the kind node's containerd, which is what lets us tell kind pods
+#   apart from everything else.
+
+driver:
+  enabled: true
+  kind: modern_ebpf          # explicit: "auto" may fall back to kmod, which cannot be built here
+  modernEbpf:
+    leastPrivileged: false   # kept privileged in the lab. Least-privilege caps are discussed in the docs.
+
+collectors:
+  enabled: true
+  containerEngine:
+    enabled: true
+    engines:
+      # Only the CRI socket of the kind node (containerd). Other engines don't exist in the node.
+      cri:
+        enabled: true
+        sockets: ["/run/containerd/containerd.sock"]
+      containerd: { enabled: false }
+      docker:     { enabled: false }
+      podman:     { enabled: false }
+      lxc:        { enabled: false }
+      libvirt_lxc: { enabled: false }
+      bpm:        { enabled: false }
+  kubernetes:
+    # Not needed: the container plugin already gives pod name, namespace and
+    # labels from CRI annotations. This avoids deploying k8s-metacollector.
+    enabled: false
+
+tty: true                    # flush logs immediately (useful while testing)
+
+resources:
+  requests: { cpu: 100m, memory: 512Mi }
+  limits:   { cpu: "1",  memory: 1024Mi }
+
+falcoctl:
+  artifact:
+    install:
+      enabled: true          # install the official rules once, at start-up
+    follow:
+      enabled: false         # no silent weekly rule updates: reproducibility
+  config:
+    artifact:
+      install:
+        refs: [falco-rules:5]
+
+falco:
+  json_output: true                    # Falcosidekick (Step 4) consumes JSON
+  json_include_output_property: true
+  json_include_tags_property: true
+  time_format_iso_8601: true
+  priority: notice                     # ignore informational/debug rule output
+  rule_matching: first
+  stdout_output:
+    enabled: true
+  # The webserver is used for the health probes and, later, the Falcosidekick
+  # integration check.
+  webserver:
+    enabled: true
+  # http_output -> Falcosidekick is configured automatically by the chart
+  # when falcosidekick.enabled=true.
+
+# ---------------------------------------------------------------------------
+# Falcosidekick: receives every Falco alert and fans it out to outputs.
+#   - webui   : visual alert timeline (demo, triage)
+#   - webhook : the SOAR (Shuffle), configured in the Shuffle step
+# Exposure: ClusterIP only, reached with `kubectl port-forward`.
+# Network access: falco/networkpolicies.yaml (only Falco may submit alerts).
+falcosidekick:
+  enabled: true
+  replicaCount: 1                     # lab: one replica is enough
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits:   { cpu: 200m, memory: 256Mi }
+  config:
+    # Static fields added to every event, so receivers know which cluster sent it.
+    customfields: "cluster:k8s-ir"
+    # SOAR output. address + customHeaders (X-IR-Token) are injected by
+    # falco/install.sh from soar/shuffle/secrets/ (never committed).
+    # warning+ = all 5 Juice Shop rules; "notice" noise does not reach the SOAR.
+    webhook:
+      minimumpriority: "warning"
+      checkcert: true
+  webui:
+    enabled: true
+    replicaCount: 1
+    # Login comes from a Secret created by falco/create-ui-secret.sh
+    # (the chart default would be admin:admin).
+    existingSecret: falcosidekick-ui-creds
+    ttl: 7d                           # keep alerts one week in the UI's Redis
+    redis:
+      storageSize: 1Gi
+

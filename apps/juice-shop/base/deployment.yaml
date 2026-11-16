@@ -1,0 +1,75 @@
+# OWASP Juice Shop, the TARGET application. The image is used as published,
+# with no source modification.
+#
+# Label scheme (designed for the incident-response steps):
+#   app.kubernetes.io/name=juice-shop  -> Deployment selector AND Service selector.
+#       Removing it from a compromised pod "orphans" the pod: the ReplicaSet
+#       starts a fresh replacement and the Service stops sending it traffic,
+#       while the compromised pod stays alive (isolated) for forensics.
+#   security.ir/monitored=true         -> marks workloads in scope for the IR playbook.
+#   security.ir/quarantine=true        -> set ONLY by the response; selects the
+#       quarantine NetworkPolicy and is excluded by every allow policy.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: juice-shop
+  labels:
+    app.kubernetes.io/name: juice-shop
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: juice-shop
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: juice-shop
+        security.ir/monitored: "true"
+    spec:
+      serviceAccountName: juice-shop
+      automountServiceAccountToken: false
+      enableServiceLinks: false          # don't leak other services' addresses as env vars
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532                 # the image's own non-root user
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: juice-shop
+          # Tag for readability + digest for immutability (pulled 2026-10-11 release).
+          image: bkimminich/juice-shop:v20.3.0@sha256:cea5a4af4aacee498c491491af0408934ec81d004035c0a02ef3e54395e3bf27
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+            # Root FS stays writable on purpose: Juice Shop writes its SQLite DB
+            # and uploads under /juice-shop, and attacker file writes must be
+            # possible for Falco to detect and for evidence collection to capture.
+            readOnlyRootFilesystem: false
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          startupProbe:                  # Juice Shop needs ~20-60 s to start
+            httpGet: { path: /rest/admin/application-version, port: http }
+            periodSeconds: 5
+            failureThreshold: 36         # up to 3 min
+          readinessProbe:
+            httpGet: { path: /rest/admin/application-version, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /rest/admin/application-version, port: http }
+            periodSeconds: 20
+            failureThreshold: 3

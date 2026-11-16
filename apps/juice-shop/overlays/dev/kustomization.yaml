@@ -1,0 +1,19 @@
+# DEV: 1 replica, http://localhost:3030.
+# The SOAR may run the full response automatically here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: juice-dev
+resources:
+  - namespace.yaml
+  - ../../base
+labels:
+  - pairs:
+      security.ir/environment: dev
+    includeSelectors: false
+    includeTemplates: true
+patches:
+  - target: { kind: Service, name: juice-shop }
+    patch: |-
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30000

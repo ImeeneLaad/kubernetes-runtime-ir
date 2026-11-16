@@ -1,0 +1,34 @@
+# Collected evidence can contain sensitive data and is large: never commit it.
+evidence/*
+evidence/.automation-paused
+!evidence/.gitkeep
+
+# Credentials / kubeconfigs (the SOAR service-account kubeconfig in particular)
+*.kubeconfig
+kubeconfig*
+*.token
+.env
+**/secrets/
+# ...except Shuffle's NON-secret configuration (ports, fixed IP, switches), required
+# to rebuild the SOAR. Its secrets are generated into soar/shuffle/secrets/ instead.
+!soar/shuffle/.env
+!soar/shuffle/upstream-v2.3.0/.env
+
+# Build input copied from the kind node (response/service/run.sh)
+response/service/bin/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Test / simulation run output
+tests/**/results/
+simulation/results/
+
+# Office lock files (created while a document is open in Word / PowerPoint)
+~$*
+
+# Raw demo screenshots: some show the approver's e-mail address.
+# The report and the deck in docs/ contain blurred copies.
+Screenshots/

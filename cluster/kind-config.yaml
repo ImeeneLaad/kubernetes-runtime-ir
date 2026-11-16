@@ -1,0 +1,33 @@
+# kind cluster for the "Réponse à l'exécution dans Kubernetes" project.
+#
+# Design decisions (see README.md, "Decision log"):
+# - SINGLE node: every kind "node" is a Docker container sharing ONE kernel.
+#   Falco (eBPF) sees every syscall on that kernel, so with N nodes each of the
+#   N Falco pods would raise the same alert -> N duplicates. One node = one Falco.
+# - Default CNI (kindnet) KEPT for now: we first verify whether it actually
+#   enforces NetworkPolicies (tests/netpol). If it does not, we recreate the
+#   cluster with `disableDefaultCNI: true` and install Calico.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: k8s-ir
+networking:
+  # Defaults made explicit so they are documented and reproducible.
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/12"
+nodes:
+  - role: control-plane
+    # Port mappings can only be set at cluster creation time.
+    extraPortMappings:
+      # Juice Shop will be exposed as NodePort 30000 -> http://localhost:3030
+      # (host port 3000 is already used by another local project).
+      # Bound to 127.0.0.1 ONLY: a deliberately vulnerable app must never be
+      # reachable from your LAN.
+      - containerPort: 30000
+        hostPort: 3030
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      # Juice Shop PROD: NodePort 30001 -> http://localhost:3031
+      - containerPort: 30001
+        hostPort: 3031
+        listenAddress: "127.0.0.1"
+        protocol: TCP

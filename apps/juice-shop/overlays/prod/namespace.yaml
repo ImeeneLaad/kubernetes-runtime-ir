@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: juice-prod
+  labels:
+    # Read by the SOAR to choose the playbook: prod = human approval required.
+    security.ir/environment: prod
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

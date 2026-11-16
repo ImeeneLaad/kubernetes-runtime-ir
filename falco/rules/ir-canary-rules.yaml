@@ -1,0 +1,17 @@
+# Heartbeat rule for the Falco canary (falco/canary/falco-canary.yaml).
+# Used by falco/check-clock.sh to measure sensor clock skew WITHOUT touching a
+# protected workload. NOTICE priority: shown in Falco's log and the Sidekick UI,
+# but below the SOAR webhook threshold (warning). Not tagged ir_response, so the
+# responder's triage would reject it anyway (and ir-system is not protected).
+- rule: IR canary heartbeat
+  desc: Process started in the Falco canary pod by the sensor self-check.
+  condition: >
+    spawned_process
+    and container
+    and k8s.ns.name = "ir-system"
+    and k8s.pod.name = "falco-canary"
+    and proc.cmdline contains "irclockcheck"
+  output: >
+    IR canary heartbeat (cmd=%proc.cmdline ns=%k8s.ns.name pod=%k8s.pod.name container_id=%container.id)
+  priority: NOTICE
+  tags: [ir_canary]

@@ -1,0 +1,17 @@
+# Prototype of the isolation policy the SOAR will use later.
+#
+# It selects nothing until a pod gets the label security.ir/quarantine=true.
+# Isolating a pod is then a single, reversible API call (add a label) instead
+# of creating/deleting policies during an incident.
+#
+# Ingress + Egress with no rules = no traffic in or out (DNS included).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: quarantine
+  namespace: netpol-test
+spec:
+  podSelector:
+    matchLabels:
+      security.ir/quarantine: "true"
+  policyTypes: ["Ingress", "Egress"]

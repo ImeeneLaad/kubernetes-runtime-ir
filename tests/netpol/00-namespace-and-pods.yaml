@@ -1,0 +1,63 @@
+# Throw-away test environment used ONLY to prove that the cluster's CNI
+# enforces NetworkPolicies before we rely on them for incident response.
+#
+#   alpha = plays the "compromised" pod (the one we will isolate)
+#   beta  = a neighbour pod (plays a peer / an attacker-controlled endpoint)
+#
+# Both serve HTTP on 8080. beta also streams one line per second on TCP 9000,
+# used to test whether an ALREADY-ESTABLISHED connection (e.g. a reverse shell)
+# is cut when isolation is applied.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: netpol-test
+  labels:
+    purpose: cni-validation
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: alpha
+  namespace: netpol-test
+  labels:
+    app: alpha
+spec:
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: main
+      image: busybox:1.36.1
+      command: ["sh", "-c"]
+      args:
+        - mkdir -p /tmp/www && echo alpha > /tmp/www/index.html &&
+          httpd -p 8080 -h /tmp/www && exec sleep infinity
+      ports:
+        - containerPort: 8080
+      securityContext:
+        runAsUser: 1000
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: beta
+  namespace: netpol-test
+  labels:
+    app: beta
+spec:
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: main
+      image: busybox:1.36.1
+      command: ["sh", "-c"]
+      args:
+        - mkdir -p /tmp/www && echo beta > /tmp/www/index.html &&
+          httpd -p 8080 -h /tmp/www &&
+          while true; do (while true; do date; sleep 1; done | nc -l -p 9000); done
+      ports:
+        - containerPort: 8080
+        - containerPort: 9000
+      securityContext:
+        runAsUser: 1000
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false

@@ -1,0 +1,83 @@
+# Baseline network posture for the Juice Shop namespace.
+# Validated CNI behaviour: docs/01-cni-validation.md.
+#
+# NetworkPolicies are ADDITIVE allow-lists, so every "allow" below EXCLUDES
+# pods labelled security.ir/quarantine. Otherwise it would silently override
+# the quarantine (see Test 4).
+---
+# 1) Deny everything by default, in and out.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+# 2) Users may reach Juice Shop on its HTTP port (via the NodePort).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-juice-shop-http-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: juice-shop
+    matchExpressions:
+      - { key: security.ir/quarantine, operator: DoesNotExist }
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 3000 }
+---
+# 3) Egress: DNS to CoreDNS, plus outbound traffic outside the cluster's
+#    pod and service networks.
+#    - Blocks lateral movement towards other pods and services.
+#    - Leaves "the internet" (and the attacker simulator on the Docker
+#      network) reachable, like a typical web app. That is what makes
+#      isolation a visible, meaningful response action in the demo.
+#    The kind Docker network is excluded too. It holds the SOAR backend
+#    (Shuffle :5001, verified blocked) and the node. Caveat, verified: traffic
+#    from a pod to its OWN node IP (API server :6443) is host-local, and
+#    kindnet does not filter it. It stays mitigated by "no SA token" + RBAC.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-juice-shop-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: juice-shop
+    matchExpressions:
+      - { key: security.ir/quarantine, operator: DoesNotExist }
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.244.0.0/16   # pod network
+              - 10.96.0.0/12    # service network
+              - 172.24.0.0/16   # kind Docker network: Shuffle SOAR (+ other nodes)
+---
+# 4) Quarantine: selects only pods the response has labelled. It has no
+#    rules, so with the allows above excluded, nothing goes in or out.
+#    The response must ALSO flush conntrack: established flows survive
+#    otherwise (Test 3/3b).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: quarantine
+spec:
+  podSelector:
+    matchLabels:
+      security.ir/quarantine: "true"
+  policyTypes: ["Ingress", "Egress"]

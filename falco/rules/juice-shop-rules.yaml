@@ -1,0 +1,147 @@
+# Custom Falco rules for the OWASP Juice Shop workload.
+#
+# Behaviour profile used to write them (see docs/03-falco.md):
+#   - distroless image: the ONLY expected process is the entrypoint
+#     /nodejs/bin/node /juice-shop/build/app.js (PID 1 in the container);
+#   - no outbound TCP connections are needed (DNS over UDP only);
+#   - reads of credential files are never needed;
+#   - writes are only expected under data/, logs/, uploads/ and ftp/.
+# Anything else in these containers is therefore a strong signal (low noise),
+# unlike generic rules, which must tolerate every possible workload.
+#
+# Tags: "juice_shop" scopes the rule, "ir_response" marks alerts the SOAR may
+# act on, plus the matching MITRE ATT&CK technique.
+
+- list: juice_shop_namespaces
+  items: [juice-dev, juice-prod]
+
+- macro: juice_shop_container
+  condition: >
+    container
+    and k8s.ns.name in (juice_shop_namespaces)
+    and container.name = "juice-shop"
+
+# Processes started by the container runtime (kubectl exec, container setup).
+- list: container_runtime_parents
+  items: [runc, "runc:[0:PARENT]", "runc:[1:CHILD]", "runc:[2:INIT]", containerd-shim, containerd-shim-runc-v2]
+
+# kind-specific OCI hook that runs in every new container's context at
+# creation (bash + jq + cp from the NODE filesystem). Matched on the exact
+# command line, not only the process name, so it is harder to impersonate.
+# Lab-only exception: it does not exist on a real cluster.
+- macro: kind_oci_hook
+  condition: >
+    (proc.cmdline = "mount-product-f /kind/bin/mount-product-files.sh"
+     or proc.pcmdline = "mount-product-f /kind/bin/mount-product-files.sh")
+
+# Directories the application itself (PID 1) writes to. Observed during the
+# false-positive baseline (startup customization + normal use).
+- list: juice_shop_write_dirs
+  items: [/juice-shop/data/, /juice-shop/logs/, /juice-shop/uploads/, /juice-shop/ftp/,
+          /juice-shop/i18n/, /juice-shop/frontend/dist/, /juice-shop/.well-known/]
+
+# Startup precondition check of Juice Shop (build/lib/startup/validatePreconditions.js):
+# fetch('https://www.alchemy.com/') to see if the Web3 challenges can work.
+- list: juice_shop_allowed_domains
+  items: [www.alchemy.com]
+
+# ---------------------------------------------------------------------------
+- rule: Juice Shop - Exec into container
+  desc: >
+    A process was started inside a Juice Shop container through the container
+    runtime (kubectl exec / crictl exec). Nobody needs an interactive session
+    in this distroless application. Legitimate evidence collection must use an
+    ephemeral debug container instead, which keeps this signal clean.
+  condition: >
+    spawned_process
+    and juice_shop_container
+    and proc.pname in (container_runtime_parents)
+    and proc.vpid != 1
+    and not proc.name startswith "runc"
+    and not kind_oci_hook
+  output: >
+    Exec into Juice Shop container
+    (cmd=%proc.cmdline exe=%proc.exepath parent=%proc.pname user=%user.name uid=%user.uid
+    ns=%k8s.ns.name pod=%k8s.pod.name container_id=%container.id image=%container.image.repository)
+  priority: WARNING
+  tags: [juice_shop, ir_response, container, mitre_execution, T1609]
+
+- rule: Juice Shop - Process spawned by the application
+  desc: >
+    The Node.js application spawned a child process. Juice Shop never does
+    this in normal operation. It is the typical result of remote code
+    execution (e.g. child_process.exec through an injection flaw).
+  condition: >
+    spawned_process
+    and juice_shop_container
+    and not proc.pname in (container_runtime_parents)
+    and proc.vpid != 1
+    and not kind_oci_hook
+  output: >
+    Juice Shop application spawned a process
+    (cmd=%proc.cmdline exe=%proc.exepath parent=%proc.pname parent_cmd=%proc.pcmdline
+    ancestors=%proc.aname[2] user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container_id=%container.id)
+  priority: CRITICAL
+  tags: [juice_shop, ir_response, container, mitre_execution, T1059]
+
+- rule: Juice Shop - Sensitive file read
+  desc: >
+    A credential or identity file was opened for reading inside a Juice Shop
+    container (account database, service-account token, process environment).
+    runc is excluded: it resolves the container user from /etc/passwd at creation.
+  condition: >
+    open_read
+    and juice_shop_container
+    and (fd.name in (/etc/shadow, /etc/passwd, /etc/group)
+         or fd.name startswith /var/run/secrets/kubernetes.io/
+         or fd.name startswith /run/secrets/kubernetes.io/
+         or fd.name glob "/proc/*/environ")
+    and not proc.name startswith "runc"
+    and not kind_oci_hook
+  output: >
+    Sensitive file read in Juice Shop
+    (file=%fd.name cmd=%proc.cmdline parent=%proc.pname user=%user.name
+    ns=%k8s.ns.name pod=%k8s.pod.name container_id=%container.id)
+  priority: ERROR
+  tags: [juice_shop, ir_response, filesystem, mitre_credential_access, T1552]
+
+- rule: Juice Shop - Outbound TCP connection
+  desc: >
+    A Juice Shop container opened an outbound TCP connection. The application
+    needs none (DNS is UDP). Typical of a reverse shell, data exfiltration or
+    payload download. Excluded: loopback (LLM availability check on :11434) and
+    the startup precondition fetch of www.alchemy.com:443 by PID 1.
+  condition: >
+    evt.type = connect
+    and fd.l4proto = tcp
+    and (fd.typechar = 4 or fd.typechar = 6)
+    and not fd.sip in ("127.0.0.1", "::1")
+    and juice_shop_container
+    and not (proc.vpid = 1 and fd.sport = 443 and fd.sip.name in (juice_shop_allowed_domains))
+  output: >
+    Outbound TCP connection from Juice Shop
+    (connection=%fd.name dest=%fd.sip:%fd.sport cmd=%proc.cmdline parent=%proc.pname
+    user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container_id=%container.id)
+  priority: CRITICAL
+  tags: [juice_shop, ir_response, network, mitre_command_and_control, T1071]
+
+- rule: Juice Shop - Write outside application data directories
+  desc: >
+    A file was opened for writing outside the directories Juice Shop uses
+    (data/, logs/, uploads/, ftp/). Typical of a dropped tool, a web shell or
+    tampering with application code.
+  condition: >
+    open_write
+    and juice_shop_container
+    and fd.typechar = f
+    and not (proc.vpid = 1 and fd.name pmatch (juice_shop_write_dirs))
+    and not fd.name startswith /dev/
+    and not fd.name startswith /proc/
+    and not proc.name startswith "runc"
+    and not kind_oci_hook
+  output: >
+    File written outside Juice Shop data directories
+    (file=%fd.name cmd=%proc.cmdline parent=%proc.pname user=%user.name
+    ns=%k8s.ns.name pod=%k8s.pod.name container_id=%container.id)
+  priority: ERROR
+  tags: [juice_shop, ir_response, filesystem, mitre_persistence, T1505]

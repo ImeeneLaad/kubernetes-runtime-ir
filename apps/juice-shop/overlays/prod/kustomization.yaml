@@ -1,0 +1,24 @@
+# PROD: 2 replicas (service survives while one pod is isolated),
+# http://localhost:3031. Sensitive response actions need human approval.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: juice-prod
+resources:
+  - namespace.yaml
+  - ../../base
+labels:
+  - pairs:
+      security.ir/environment: prod
+    includeSelectors: false
+    includeTemplates: true
+patches:
+  - target: { kind: Service, name: juice-shop }
+    patch: |-
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30001
+  - target: { kind: Deployment, name: juice-shop }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
