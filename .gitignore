@@ -26,6 +26,9 @@ __pycache__/
 tests/**/results/
 simulation/results/
 
+# Documentation, report and slides are kept locally, not published
+docs/
+
 # Office lock files (created while a document is open in Word / PowerPoint)
 ~$*
 
